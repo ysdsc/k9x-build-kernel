@@ -1,0 +1,148 @@
+name: Build K9x Kernel (BakaSU + HyperSU)
+
+# OPPO K9x (MT6833, Linux 4.19.191)
+#
+# 本仓库只存放脚本, 内核源码由 workflow 从 OPPO 官方开源仓库现场 clone:
+#   https://github.com/oppo-source/android_kernel_oppo_mt6833
+#   分支 oppo/mt6833_t_13.0_a55_a53s_k9x_5g @ a4ec4ac5 (Linux 4.19.191)
+# 这样推送量只有几十 KB, 弱网环境下也能秒传。
+#
+# 产物 (名称带方案标识, 不会混淆):
+#   dist/k9x-resukisu-<commit>-4.19.191-<时间>.zip    ← BakaSU / ReSukiSU 版
+#   dist/k9x-hypersu-<commit>-4.19.191-<时间>.zip     ← HyperSU 版
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: '要编译的方案 (空格分隔): bakasu hypersu, 或只填其一'
+        required: false
+        default: 'bakasu hypersu'
+      kernel_ref:
+        description: '内核分支/commit (留空用默认 k9x 分支)'
+        required: false
+        default: ''
+  push:
+    branches: [ main ]
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout (仅脚本)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 显示环境
+        run: |
+          echo "CPU: $(nproc) 核"
+          free -h
+          df -h "$PWD"
+          ls -la
+
+      - name: 安装构建依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            python3 zip unzip git cpio rsync zlib1g-dev \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: 缓存 clang-r383902
+        id: clang-cache
+        uses: actions/cache@v4
+        with:
+          path: clang-r383902
+          key: clang-r383902-linux-x86_64-v1
+
+      - name: 下载 clang-r383902 (与设备原厂内核一致)
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          mkdir -p clang-r383902
+          for url in \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android-11.0.0_r48/clang-r383902.tar.gz" \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-11.0.0_r48/clang-r383902.tar.gz"
+          do
+            echo "尝试: $url"
+            if curl -fsSL --retry 3 "$url" -o clang.tar.gz; then
+              tar -xzf clang.tar.gz -C clang-r383902
+              rm -f clang.tar.gz
+              break
+            fi
+          done
+          test -x clang-r383902/bin/clang || { echo "下载 clang 失败"; exit 1; }
+          ./clang-r383902/bin/clang --version | head -1
+
+      - name: 校验 clang 版本
+        run: |
+          ./clang-r383902/bin/clang --version | head -1
+          ./clang-r383902/bin/clang --version | grep -qE 'clang version 1[01]\.' \
+            || echo "警告: clang 版本与原厂 11.0.1 不完全一致"
+
+      - name: 预检脚本
+        run: |
+          for f in scripts/k9x-cloud-build.sh scripts/apply-resukisu-shim.sh scripts/apply-defconfig.sh; do
+            test -f "$f" || { echo "缺少 $f"; exit 1; }
+            bash -n "$f" || { echo "$f 语法错误"; exit 1; }
+          done
+          echo "脚本语法检查通过"
+
+      - name: 编译两个方案
+        env:
+          WORK_DIR: ${{ github.workspace }}/work
+          OUT_BASE: ${{ github.workspace }}/out
+          CLANG_DIR: ${{ github.workspace }}/clang-r383902
+          BUILD_VARIANTS: ${{ github.event.inputs.variants || 'bakasu hypersu' }}
+          JOBS: 4
+        run: |
+          chmod +x scripts/*.sh
+          bash scripts/k9x-cloud-build.sh
+
+      - name: 列出产物
+        if: always()
+        run: |
+          echo "================ dist ================"
+          ls -la dist/ 2>/dev/null || true
+
+      - name: 上传产物 (BakaSU / ReSukiSU)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k9x-resukisu-BakaSU-${{ github.run_number }}
+          path: |
+            dist/k9x-resukisu-*.zip
+            out/bakasu/build.log
+            out/bakasu/.config
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 上传产物 (HyperSU)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k9x-hypersu-HyperSU-${{ github.run_number }}
+          path: |
+            dist/k9x-hypersu-*.zip
+            out/hypersu/build.log
+            out/hypersu/.config
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: 编译失败时打印错误摘要
+        if: failure()
+        run: |
+          echo "================ 错误摘要 ================"
+          for v in bakasu hypersu; do
+            if [ -f "out/$v/build.log" ]; then
+              echo "---- $v ----"
+              grep -nE 'error:|Error [0-9]|fatal error|undefined reference|No rule to make' \
+                "out/$v/build.log" | head -30 || echo "(未匹配到典型错误行)"
+              tail -20 "out/$v/build.log"
+            fi
+          done

@@ -1,0 +1,65 @@
+# 强制规范化换行符 —— 防止 Windows 的 core.autocrlf=true 把脚本改成 CRLF
+#
+# 背景: GitHub Actions 的 ubuntu runner 上用 bash 执行 .sh 脚本,
+# 如果文件是 CRLF, 会报 "bad interpreter: /bin/bash^M: No such file or directory"。
+# 内核源码树同理: Kbuild/Makefile 带 CRLF 会导致编译异常。
+#
+# 本文件优先级高于 core.autocrlf, 确保 checkout 后一律为 LF。
+
+# ---- 所有文本文件默认 LF (仓库内存储, 检出时也保持 LF) ----
+* text=auto eol=lf
+
+# ---- shell / python 脚本: 必须是 LF, 否则 CI 直接失败 ----
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.mk            text eol=lf
+Makefile        text eol=lf
+Kconfig*        text eol=lf
+Kbuild          text eol=lf
+*defconfig      text eol=lf
+*.config        text eol=lf
+*.md            text eol=lf
+*.txt           text eol=lf
+
+# ---- 内核源码常见的 C/汇编/头文件 ----
+*.c             text eol=lf
+*.h             text eol=lf
+*.S             text eol=lf
+*.s             text eol=lf
+*.dts           text eol=lf
+*.dtsi          text eol=lf
+*.lds           text eol=lf
+*.rst           text eol=lf
+
+# ---- 二进制: 不做任何换行转换, 防止 squash/损坏 ----
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.zip           binary
+*.gz            binary
+*.zst           binary
+*.xz            binary
+*.img           binary
+*.zstd          binary
+*.o             binary
+*.a             binary
+*.so            binary
+*.bin           binary
+*.ko            binary
+*.apk           binary
+*.z               binary
+*.woff          binary
+*.ttf           binary
+*.jar           binary
+*.p7s           binary
+*.pdf           binary
+
+# ---- PowerShell 脚本: 本机 Windows 使用, 保持 CRLF 更符合习惯 ----
+# (必须在上面通配规则之后, 后定义的优先级更高)
+*.ps1           text eol=crlf
+*.psm1          text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf

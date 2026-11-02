@@ -1,0 +1,36 @@
+# ============================================================
+# 本仓库只存放脚本。内核源码由 GitHub Actions 现场从 OPPO 官方仓库 clone:
+#   https://github.com/oppo-source/android_kernel_oppo_mt6833
+#   分支 oppo/mt6833_t_13.0_a55_a53s_k9x_5g
+# 因此内核源码目录一律不入库 —— 否则仓库会有 8 万文件 / 218 MB,
+# 在弱网环境下无法推送。
+# ============================================================
+
+# ---- 内核源码目录 (本地保留, 但绝不提交) ----
+k9x-kernel/
+
+# ---- 重复的原始解压目录 ----
+android_kernel_oppo_mt6833-oppo-mt6833_t_13.0_a55_a53s_k9x_5g/
+
+# ---- 本机构建/测试产物 ----
+work/
+out/
+dist/
+e2e/
+patchtest/
+patchtest-orig/
+scripts/work-*/
+scripts/backup/
+*.log
+
+# ---- ReSukiSU / HyperSU 拉取进来的外部仓库 (CI 现场 clone) ----
+KernelSU/
+
+# ---- 编辑器/系统 ----
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
