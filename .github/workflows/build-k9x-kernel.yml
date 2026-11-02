@@ -58,29 +58,60 @@ jobs:
         uses: actions/cache@v4
         with:
           path: clang-r383902
-          key: clang-r383902-linux-x86_64-v1
+          key: clang-r383902-multi-mirror-v3
 
+      # 说明: android.googlesource.com 的 +archive 接口对目录路径要求 ref 真实存在,
+      # android-11.0.0_r48 这个 tag 在 prebuilts/clang/host/linux-x86 仓库里并不存在 -> 404。
+      # 改用 GitHub 上的镜像仓库 (均为 clang 11.0.1 / build 6443078, 与原厂一致),
+      # 其根目录即 clang-r383902 的内容 (bin/ lib/ lib64/ ...)。逐个尝试, 任一成功即可。
       - name: 下载 clang-r383902 (与设备原厂内核一致)
         if: steps.clang-cache.outputs.cache-hit != 'true'
         run: |
-          set -e
-          mkdir -p clang-r383902
-          for url in \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android-11.0.0_r48/clang-r383902.tar.gz" \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-11.0.0_r48/clang-r383902.tar.gz"
-          do
-            echo "尝试: $url"
-            if curl -fsSL --retry 3 "$url" -o clang.tar.gz; then
-              tar -xzf clang.tar.gz -C clang-r383902
-              rm -f clang.tar.gz
-              break
+          set -u
+          rm -rf clang-tmp clang-r383902
+
+          try_clone() {
+            local url="$1" branch="$2" name="$3"
+            echo "==> 尝试 [$name] $url ($branch)"
+            rm -rf clang-tmp
+            if git clone --depth=1 --single-branch --branch "$branch" "$url" clang-tmp 2>&1 | tail -3; then
+              if [ -x clang-tmp/bin/clang ]; then
+                echo "    成功: bin/clang 就绪"
+                return 0
+              fi
+              echo "    结构异常: 缺少 bin/clang"
+            else
+              echo "    克隆失败"
             fi
-          done
-          test -x clang-r383902/bin/clang || { echo "下载 clang 失败"; exit 1; }
-          ./clang-r383902/bin/clang --version | head -1
+            rm -rf clang-tmp
+            return 1
+          }
+
+          ok=0
+          # 镜像 1: crDroid (分支 10.0) —— 最常用, fork 数多
+          try_clone "https://github.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-6443078.git" "10.0" "crdroid" && ok=1
+          # 镜像 2: Ancient-Lab (分支 ten)
+          if [ "$ok" = "0" ]; then
+            try_clone "https://github.com/Ancient-Lab/prebuilts_clang_host_linux-x86_clang-r383902.git" "ten" "Ancient-Lab" && ok=1
+          fi
+          # 镜像 3: picasso09 (分支 11.0.1)
+          if [ "$ok" = "0" ]; then
+            try_clone "https://github.com/picasso09/clang-11.0.1-r383902.git" "11.0.1" "picasso09" && ok=1
+          fi
+
+          if [ "$ok" != "1" ]; then
+            echo "所有 clang 镜像均失败"
+            exit 1
+          fi
+
+          mv clang-tmp clang-r383902
+          test -x clang-r383902/bin/clang || { echo "clang 路径异常"; exit 1; }
+          chmod +x clang-r383902/bin/* 2>/dev/null || true
+          ./clang-r383902/bin/clang --version | head -3
 
       - name: 校验 clang 版本
         run: |
+          test -x ./clang-r383902/bin/clang || { echo "clang 不存在"; exit 1; }
           ./clang-r383902/bin/clang --version | head -1
           ./clang-r383902/bin/clang --version | grep -qE 'clang version 1[01]\.' \
             || echo "警告: clang 版本与原厂 11.0.1 不完全一致"
