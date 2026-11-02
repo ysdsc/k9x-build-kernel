@@ -199,8 +199,20 @@ build_one() {
   # --- 生成 .config 并校验 ---
   rm -rf "$out"; mkdir -p "$out"
   echo "-> 生成 .config"
-  make -C "$KERNEL_DIR" O="$out" ARCH=arm64 LLVM=1 LLVM_IAS=1 "$DEFCONFIG" \
-    > "$out/config.log" 2>&1 || die "$tag: .config 生成失败, 见 config.log"
+  if ! make -C "$KERNEL_DIR" O="$out" ARCH=arm64 LLVM=1 LLVM_IAS=1 "$DEFCONFIG" \
+        > "$out/config.log" 2>&1; then
+    echo
+    echo "########## .config 生成失败, config.log 全文 ##########"
+    cat "$out/config.log"
+    echo "######################################################"
+    echo "---- drivers/Kconfig 中的 kernelsu ----"
+    grep -n 'kernelsu' drivers/Kconfig || echo "(无)"
+    echo "---- drivers/Makefile 中的 kernelsu ----"
+    grep -n 'kernelsu' drivers/Makefile || echo "(无)"
+    echo "---- 顶层 Kconfig 尾部 10 行 ----"
+    tail -10 Kconfig
+    die "$tag: .config 生成失败"
+  fi
 
   local miss=0
   for cfg in CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_KALLSYMS_ALL; do

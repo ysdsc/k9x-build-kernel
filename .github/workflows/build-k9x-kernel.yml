@@ -149,6 +149,7 @@ jobs:
           path: |
             dist/k9x-resukisu-*.zip
             out/bakasu/build.log
+            out/bakasu/config.log
             out/bakasu/.config
           if-no-files-found: warn
           retention-days: 30
@@ -161,6 +162,7 @@ jobs:
           path: |
             dist/k9x-hypersu-*.zip
             out/hypersu/build.log
+            out/hypersu/config.log
             out/hypersu/.config
           if-no-files-found: warn
           retention-days: 30

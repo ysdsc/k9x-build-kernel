@@ -79,14 +79,31 @@ print("PATCHED")
 ' "$f" || fail "replace_once 失败: $f"
 }
 
-log "=== 1/5 Kconfig: 挂载 ReSukiSU ==="
-# 顶层 Kconfig 末尾追加 source，使源码树内出现 CONFIG_KSU / CONFIG_KSU_MANUAL_HOOK
-if grep -qF "source \"KernelSU/Kconfig\"" Kconfig; then
-  log "skip (已打)  Kconfig"
+log "=== 1/5 Kconfig: 校验 ReSukiSU 已通过 drivers/Kconfig 接入 ==="
+# 重要: 上游 setup.sh 已经把驱动挂到 drivers/Kconfig:
+#     source "drivers/kernelsu/Kconfig"
+# 而 drivers/kernelsu 是指向 KernelSU/kernel 的软链。
+# 如果这里再往顶层 Kconfig 追加 source "KernelSU/Kconfig",
+# 同一个文件会被 Kconfig 解析两次 -> 触发 "recursive inclusion" /
+# 重复符号定义, 导致 make <defconfig> 直接失败(这正是第一次 CI 的报错)。
+# 因此本步骤只做校验, 不再追加任何 source。
+if grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
+  log "OK   drivers/Kconfig 已 source drivers/kernelsu/Kconfig"
 else
-  printf '\n# %s ReSukiSU\nsource "KernelSU/Kconfig"\n' "$MARK" >> Kconfig
-  log "patched      Kconfig"
+  fail "drivers/Kconfig 未接入 kernelsu —— 上游 setup.sh 可能失败"
 fi
+# 软链只做提示, 不作为失败条件(不同文件系统的 symlink 语义可能不同)
+if [ -e drivers/kernelsu/Kconfig ]; then
+  log "OK   drivers/kernelsu/Kconfig 可访问"
+else
+  log "警告 drivers/kernelsu/Kconfig 不可访问, 请检查 setup.sh 的软链"
+fi
+# 清理历史遗留: 早期版本往顶层 Kconfig 追加过 source, 这里主动移除
+if grep -qF 'source "KernelSU/Kconfig"' Kconfig; then
+  sed -i '/# \[RESUKISU\] ReSukiSU/d; /source "KernelSU\/Kconfig"/d' Kconfig
+  log "已移除顶层 Kconfig 里重复的 source 行"
+fi
+log "顶层 Kconfig 保持干净 (不重复 source)"
 
 log "=== 2/5 fs/exec.c : execve hook (4.19 do_execveat_common) ==="
 # 注意: 必须整段替换原函数。若用 insert_before 会在原函数前多出一条仅有声明+新函数体的
