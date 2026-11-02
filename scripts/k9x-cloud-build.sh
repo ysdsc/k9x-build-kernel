@@ -44,6 +44,9 @@ SKIP_CLONE="${SKIP_CLONE:-0}"
 KERNEL_REPO="https://github.com/oppo-source/android_kernel_oppo_mt6833"
 KERNEL_BRANCH="oppo/mt6833_t_13.0_a55_a53s_k9x_5g"
 KERNEL_COMMIT="a4ec4ac5070eaabbfc185f769dab1f26d3825000"
+# 模块仓库: 提供 vendor/oplus/** (主仓库的符号链接目标)
+MODULES_REPO="https://github.com/oppo-source/android_kernel_modules_oppo_mt6833"
+MODULES_BRANCH="oppo/mt6833_t_13.0_a55_a53s_k9x_5g"
 DEFCONFIG=k6833v1_64_k419_defconfig
 
 banner() { printf '\n\033[1;44;37m %s \033[0m\n' "$*"; }
@@ -109,6 +112,51 @@ else
   grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) ' "$KERNEL_DIR/Makefile" | tr '\n' ' '
   echo
 fi
+
+# ---------------------------------------------------------------------------
+# 2. 补上 vendor/oplus —— 主仓库里的符号链接目标, 位于独立仓库
+#    OPPO 把内核拆成两个仓库发布:
+#      android_kernel_oppo_mt6833          内核主代码 (含指向 vendor 的符号链接)
+#      android_kernel_modules_oppo_mt6833  vendor/oplus/** 全部专有驱动
+#    缺少模块仓库时, init/Kconfig source "kernel/sched_assist/Kconfig" 会直接失败
+#    (该路径是指向 vendor/oplus/kernel/oplus_performance/sched_assist 的软链)。
+# ---------------------------------------------------------------------------
+if [ ! -e "$KERNEL_DIR/vendor/oplus/kernel" ]; then
+  banner "2. 补上 vendor/oplus (模块仓库)"
+  echo "   repo   : $MODULES_REPO"
+  echo "   branch : $MODULES_BRANCH"
+  MOD_TMP="$WORK_DIR/_modules"
+  rm -rf "$MOD_TMP"
+  if ! git clone --depth=1 --single-branch --branch "$MODULES_BRANCH" \
+        "$MODULES_REPO" "$MOD_TMP" 2>/dev/null; then
+    echo "   分支克隆失败, 尝试默认分支"
+    rm -rf "$MOD_TMP"
+    git clone --depth=1 "$MODULES_REPO" "$MOD_TMP" \
+      || die "无法获取模块仓库 $MODULES_REPO"
+  fi
+  # 模块仓库根目录即 vendor/, 直接放到内核树根
+  if [ -d "$MOD_TMP/vendor" ]; then
+    mv "$MOD_TMP/vendor" "$KERNEL_DIR/vendor"
+  else
+    mkdir -p "$KERNEL_DIR/vendor"
+    cp -a "$MOD_TMP/." "$KERNEL_DIR/vendor/"
+  fi
+  rm -rf "$MOD_TMP"
+  echo "   vendor/ 已放置"
+else
+  banner "2. vendor/oplus 已存在, 跳过"
+fi
+
+# 验证关键符号链接目标是否就位
+for p in vendor/oplus/kernel/oplus_performance/sched_assist/Kconfig \
+         vendor/oplus/kernel/oplus_performance/klockopt/Kconfig; do
+  if [ -e "$KERNEL_DIR/$p" ]; then
+    echo "   OK   $p"
+  else
+    echo "   FAIL $p 不存在 —— 编译会在 Kconfig 阶段失败"
+    die "vendor 不完整"
+  fi
+done
 
 [ -d "$KERNEL_DIR" ] || die "内核源码目录不存在: $KERNEL_DIR"
 [ -f "$KERNEL_DIR/Makefile" ] || die "内核源码不完整: 缺少 Makefile"
