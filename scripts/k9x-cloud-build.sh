@@ -166,6 +166,55 @@ for p in vendor/oplus/kernel/oplus_performance/sched_assist/Kconfig \
   fi
 done
 
+# --- 诊断并强制修复 kernel/ 下的符号链接 ---
+# OPPO 源码用 kernel/sched_assist -> ../../vendor/oplus/kernel/oplus_performance/sched_assist
+# 这类软链跨到 vendor/。git clone 时 vendor/ 尚不存在, 软链的创建行为依赖平台,
+# 因此这里不依赖 git, 直接用真实目录替换, 保证 Kconfig 的 source 一定能找到文件。
+echo "-> 检查并修复 kernel/ 下的符号链接"
+repair_link() {
+  local link="$1" real="$2"
+  local full="$KERNEL_DIR/$link"
+  echo "   [$link]"
+  # 只有"目录且其下有 Kconfig"才算真正可用。
+  # 注意: 0 字节空文件会让 [ -e ] 为真, 但它是文件不是目录, Kconfig 无法打开。
+  if [ -d "$full" ] && [ -f "$full/Kconfig" ]; then
+    echo "      已可用 ($( [ -L "$full" ] && readlink "$full" || echo '实体目录' ))"
+    return 0
+  fi
+  [ -d "$real" ] || { echo "      目标目录不存在: $real"; return 1; }
+  # 不管原来是软链、空文件还是缺失, 一律删除后用指向真实目录的软链替换
+  rm -rf "$full"
+  mkdir -p "$(dirname "$full")"
+  ln -s "$real" "$full"
+  if [ -d "$full" ] && [ -f "$full/Kconfig" ]; then
+    echo "      已重建软链 -> $real"
+    return 0
+  fi
+  # 软链仍不可用时, 退化为直接复制内容
+  echo "      软链失败, 改为复制目录内容"
+  rm -f "$full"
+  mkdir -p "$full"
+  cp -a "$real/." "$full/"
+  [ -d "$full" ] && [ -f "$full/Kconfig" ] && { echo "      已复制内容"; return 0; }
+  return 1
+}
+
+repair_link "kernel/sched_assist" \
+            "$KERNEL_DIR/vendor/oplus/kernel/oplus_performance/sched_assist" \
+  || die "无法准备 kernel/sched_assist"
+repair_link "kernel/locking/klockopt" \
+            "$KERNEL_DIR/vendor/oplus/kernel/oplus_performance/klockopt" \
+  || die "无法准备 kernel/locking/klockopt"
+
+# 最终硬性校验: 这两个 Kconfig 必须能打开
+for kc in kernel/sched_assist/Kconfig kernel/locking/klockopt/Kconfig; do
+  if [ -f "$KERNEL_DIR/$kc" ]; then
+    echo "   OK   $kc"
+  else
+    die "$kc 不可用 —— Kconfig 解析会失败"
+  fi
+done
+
 [ -d "$KERNEL_DIR" ] || die "内核源码目录不存在: $KERNEL_DIR"
 [ -f "$KERNEL_DIR/Makefile" ] || die "内核源码不完整: 缺少 Makefile"
 [ -f "$KERNEL_DIR/arch/arm64/configs/$DEFCONFIG" ] || die "缺少 defconfig: $DEFCONFIG"
@@ -237,12 +286,40 @@ build_one() {
 
   # --- 上游 setup.sh 接入驱动 ---
   echo "-> 运行 setup.sh"
-  sh KernelSU/kernel/setup.sh main >/dev/null 2>&1 || \
-    sh KernelSU/kernel/setup.sh >/dev/null 2>&1 || true
-  [ -L drivers/kernelsu ] || die "$tag: drivers/kernelsu 软链建立失败"
-  grep -q 'kernelsu' drivers/Makefile || die "$tag: drivers/Makefile 修改失败"
-  grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || die "$tag: drivers/Kconfig 修改失败"
-  echo "   接入完成"
+  # setup.sh 需要从内核源码根运行; 它会软链 drivers/kernelsu 并改 drivers/{Makefile,Kconfig}
+  set +e
+  sh KernelSU/kernel/setup.sh main
+  rc=$?
+  set -e
+  if [ $rc -ne 0 ]; then
+    echo "   setup.sh 返回 $rc, 尝试无参数调用"
+    set +e
+    sh KernelSU/kernel/setup.sh
+    rc=$?
+    set -e
+    echo "   无参数调用返回 $rc"
+  fi
+
+  # 硬性校验三件事, 缺一不可
+  if [ ! -d drivers/kernelsu ] || [ ! -f drivers/kernelsu/Kconfig ]; then
+    echo "   drivers/kernelsu 不可用, 手动建立软链"
+    rm -rf drivers/kernelsu
+    ln -s "$(realpath --relative-to=drivers "$KERNEL_DIR/KernelSU/kernel")" drivers/kernelsu
+    [ -f drivers/kernelsu/Kconfig ] || die "$tag: drivers/kernelsu/Kconfig 无法访问"
+  fi
+  grep -q 'kernelsu' drivers/Makefile || {
+    echo "   drivers/Makefile 补入 kernelsu"
+    printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+  }
+  grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || {
+    echo "   drivers/Kconfig 补入 source"
+    sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+  }
+  [ -d drivers/kernelsu ] || die "$tag: drivers/kernelsu 不可用"
+  [ -f drivers/kernelsu/Kconfig ] || die "$tag: drivers/kernelsu/Kconfig 不可用"
+  grep -q 'kernelsu' drivers/Makefile || die "$tag: drivers/Makefile 未接入"
+  grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || die "$tag: drivers/Kconfig 未接入"
+  echo "   接入完成 (已逐项校验)"
 
   # --- 注入 4.19 手动 hook ---
   echo "-> 注入 4.19 手动 hook"
