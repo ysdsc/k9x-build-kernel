@@ -88,19 +88,27 @@ else
   rm -rf "$KERNEL_DIR"
 
   # --depth 1 只取需要的分支, 避免下载整个 2.4 GB 仓库历史
-  # 先尝试按分支浅克隆, 失败则回退到按 commit 克隆
-  if git clone --depth=1 --single-branch --branch "$KERNEL_BRANCH" \
-        "$KERNEL_REPO" "$KERNEL_DIR" 2>/dev/null; then
-    echo "   分支克隆成功"
-  else
-    echo "   分支克隆失败, 改为按 commit 克隆"
+  # 不再用 2>/dev/null 吞掉错误 —— clone 失败时必须看到原因
+  echo "-> 浅克隆主分支 (预计 280 MB)"
+  set +e
+  git clone --depth=1 --single-branch --branch "$KERNEL_BRANCH" \
+      --progress "$KERNEL_REPO" "$KERNEL_DIR"
+  rc=$?
+  set -e
+  if [ $rc -ne 0 ]; then
+    echo "   分支克隆失败 (exit=$rc), 改为按 commit 克隆"
     rm -rf "$KERNEL_DIR"
     mkdir -p "$KERNEL_DIR"
     git -C "$KERNEL_DIR" init -q
     git -C "$KERNEL_DIR" remote add origin "$KERNEL_REPO"
-    git -C "$KERNEL_DIR" fetch --depth=1 origin "$KERNEL_COMMIT" \
-      || die "无法获取内核源码 commit $KERNEL_COMMIT"
+    set +e
+    git -C "$KERNEL_DIR" fetch --depth=1 --progress origin "$KERNEL_COMMIT"
+    rc2=$?
+    set -e
+    [ $rc2 -eq 0 ] || die "无法获取内核源码 (分支和 commit 两种方式都失败, exit=$rc/$rc2)"
     git -C "$KERNEL_DIR" checkout -q FETCH_HEAD
+  else
+    echo "   分支克隆成功"
   fi
 
   local_head="$(git -C "$KERNEL_DIR" rev-parse HEAD)"

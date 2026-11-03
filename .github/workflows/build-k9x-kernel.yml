@@ -133,7 +133,10 @@ jobs:
           JOBS: 4
         run: |
           chmod +x scripts/*.sh
-          bash scripts/k9x-cloud-build.sh
+          mkdir -p logs
+          # 完整日志同时写入 logs/build-console.log, 失败时随 artifact 上传
+          bash scripts/k9x-cloud-build.sh 2>&1 | tee logs/build-console.log
+          exit ${PIPESTATUS[0]}
 
       - name: 列出产物
         if: always()
@@ -148,6 +151,7 @@ jobs:
           name: k9x-resukisu-BakaSU-${{ github.run_number }}
           path: |
             dist/k9x-resukisu-*.zip
+            logs/build-console.log
             out/bakasu/build.log
             out/bakasu/config.log
             out/bakasu/.config
@@ -161,6 +165,7 @@ jobs:
           name: k9x-hypersu-HyperSU-${{ github.run_number }}
           path: |
             dist/k9x-hypersu-*.zip
+            logs/build-console.log
             out/hypersu/build.log
             out/hypersu/config.log
             out/hypersu/.config
