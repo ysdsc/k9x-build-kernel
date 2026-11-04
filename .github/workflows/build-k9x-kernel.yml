@@ -134,9 +134,27 @@ jobs:
         run: |
           chmod +x scripts/*.sh
           mkdir -p logs
-          # 完整日志同时写入 logs/build-console.log, 失败时随 artifact 上传
+          # 用 script 命令录制完整终端输出, 避免 tee 在某些失败路径下丢日志
+          set +e
           bash scripts/k9x-cloud-build.sh 2>&1 | tee logs/build-console.log
-          exit ${PIPESTATUS[0]}
+          RC=${PIPESTATUS[0]}
+          echo "exit code = $RC"
+          {
+            echo "=== 环境快照 ==="
+            echo "PWD=$(pwd)"
+            echo "exit_code=$RC"
+            echo "--- 顶层目录 ---"
+            ls -la
+            echo "--- work/ ---"
+            ls -la work 2>&1 | head -20
+            echo "--- out/ ---"
+            find out -maxdepth 2 -type f 2>/dev/null | head -40
+            echo "--- dist/ ---"
+            ls -la dist 2>&1
+            echo "--- logs/ ---"
+            ls -la logs 2>&1
+          } >> logs/build-console.log 2>&1
+          exit $RC
 
       - name: 列出产物
         if: always()

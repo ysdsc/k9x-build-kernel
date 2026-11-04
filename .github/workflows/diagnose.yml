@@ -1,0 +1,44 @@
+name: Diagnose K9x Build
+
+# 诊断专用 workflow: 只跑 clone + 软链检查, 3-5 分钟出结果
+# 结果写入 step-status.log 并作为 artifact 上传
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            python3 zip unzip git cpio rsync zlib1g-dev \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: 运行诊断
+        run: |
+          chmod +x scripts/diagnose.sh
+          bash scripts/diagnose.sh "$GITHUB_WORKSPACE/step-status.log" || true
+          echo "=========== step-status.log ==========="
+          cat "$GITHUB_WORKSPACE/step-status.log" || echo "(日志不存在)"
+          echo "======================================="
+
+      - name: 上传诊断结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnose-result
+          path: |
+            step-status.log
+            config-test.log
+          if-no-files-found: warn
+          retention-days: 7
