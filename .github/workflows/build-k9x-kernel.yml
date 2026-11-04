@@ -10,13 +10,16 @@ name: Build K9x Kernel (BakaSU + HyperSU)
 # 产物 (名称带方案标识, 不会混淆):
 #   dist/k9x-resukisu-<commit>-4.19.191-<时间>.zip    ← BakaSU / ReSukiSU 版
 #   dist/k9x-hypersu-<commit>-4.19.191-<时间>.zip     ← HyperSU 版
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
       variants:
         description: '要编译的方案 (空格分隔): bakasu hypersu, 或只填其一'
         required: false
-        default: 'bakasu hypersu'
+        default: 'bakasu'
       kernel_ref:
         description: '内核分支/commit (留空用默认 k9x 分支)'
         required: false
@@ -129,7 +132,7 @@ jobs:
           WORK_DIR: ${{ github.workspace }}/work
           OUT_BASE: ${{ github.workspace }}/out
           CLANG_DIR: ${{ github.workspace }}/clang-r383902
-          BUILD_VARIANTS: ${{ github.event.inputs.variants || 'bakasu hypersu' }}
+          BUILD_VARIANTS: ${{ github.event.inputs.variants || 'bakasu' }}
           JOBS: 4
         run: |
           chmod +x scripts/*.sh
@@ -190,6 +193,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: 把构建日志提交回仓库 (便于排查)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in logs/build-console.log out/bakasu/config.log out/hypersu/config.log out/bakasu/build.log out/hypersu/build.log; do
+            if [ -f "$f" ]; then
+              base="$(basename "$f")"
+              dir="$(dirname "$f" | tr '/' '_')"
+              cp "$f" "ci-log-${{ github.run_number }}-${dir}-${base}" || true
+            fi
+          done
+          ls -la ci-log-* 2>/dev/null || echo "(无日志文件)"
+          git add 'ci-log-*' 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "无日志需提交"
+          else
+            git commit -m "ci: build log #${{ github.run_number }}" || true
+            git pull --rebase --autostash || true
+            git push || echo "push 失败(可能无权限)"
+          fi
       - name: 编译失败时打印错误摘要
         if: failure()
         run: |

@@ -87,34 +87,59 @@ else
   mkdir -p "$WORK_DIR"
   rm -rf "$KERNEL_DIR"
 
-  # --depth 1 只取需要的分支, 避免下载整个 2.4 GB 仓库历史
-  # 不再用 2>/dev/null 吞掉错误 —— clone 失败时必须看到原因
-  echo "-> 浅克隆主分支 (预计 280 MB)"
+  # 优先用 codeload 的 tarball: 纯 HTTP 下载, 不涉及 git 对象协商,
+  # 比 git clone 快且稳 (clone 218 MB 需 90+ 秒且易被中断)。
+  # 失败再退回 git clone。
+  KE_BRANCH_ENC="$(echo "$KERNEL_BRANCH" | sed 's#/#%2F#g')"
+  TARBALL_URL="https://codeload.github.com/oppo-source/android_kernel_oppo_mt6833/tar.gz/refs/heads/$KE_BRANCH_ENC"
+  echo "-> 下载 tarball (预计 280 MB)"
+  echo "   $TARBALL_URL"
+  got=0
   set +e
-  git clone --depth=1 --single-branch --branch "$KERNEL_BRANCH" \
-      --progress "$KERNEL_REPO" "$KERNEL_DIR"
+  curl -fL --retry 5 --retry-delay 3 --retry-all-errors \
+       --connect-timeout 30 --max-time 900 \
+       -o "$WORK_DIR/kernel.tar.gz" "$TARBALL_URL"
   rc=$?
   set -e
-  if [ $rc -ne 0 ]; then
-    echo "   分支克隆失败 (exit=$rc), 改为按 commit 克隆"
-    rm -rf "$KERNEL_DIR"
+  echo "   curl exit=$rc, 文件大小=$(stat -c%s "$WORK_DIR/kernel.tar.gz" 2>/dev/null || echo 0) 字节"
+
+  if [ $rc -eq 0 ] && [ -s "$WORK_DIR/kernel.tar.gz" ]; then
+    echo "-> 解压 tarball"
     mkdir -p "$KERNEL_DIR"
-    git -C "$KERNEL_DIR" init -q
-    git -C "$KERNEL_DIR" remote add origin "$KERNEL_REPO"
     set +e
-    git -C "$KERNEL_DIR" fetch --depth=1 --progress origin "$KERNEL_COMMIT"
-    rc2=$?
+    tar -xzf "$WORK_DIR/kernel.tar.gz" -C "$KERNEL_DIR" --strip-components=1
+    rc=$?
     set -e
-    [ $rc2 -eq 0 ] || die "无法获取内核源码 (分支和 commit 两种方式都失败, exit=$rc/$rc2)"
-    git -C "$KERNEL_DIR" checkout -q FETCH_HEAD
+    if [ $rc -eq 0 ] && [ -f "$KERNEL_DIR/Makefile" ]; then
+      echo "   tarball 解压成功"
+      got=1
+    else
+      echo "   tarball 解压失败 (exit=$rc)"
+      rm -rf "$KERNEL_DIR"
+    fi
   else
-    echo "   分支克隆成功"
+    echo "   tarball 下载失败"
+    rm -f "$WORK_DIR/kernel.tar.gz"
   fi
 
-  local_head="$(git -C "$KERNEL_DIR" rev-parse HEAD)"
-  echo "   实际 HEAD: $local_head"
-  if [ "$local_head" != "$KERNEL_COMMIT" ]; then
-    echo "   警告: HEAD 与预期 commit 不同 (分支可能已更新), 继续"
+  if [ $got -eq 0 ]; then
+    echo "-> 回退到 git clone"
+    rm -rf "$KERNEL_DIR"
+    set +e
+    git clone --depth=1 --single-branch --branch "$KERNEL_BRANCH" \
+        --progress "$KERNEL_REPO" "$KERNEL_DIR"
+    rc=$?
+    set -e
+    [ $rc -eq 0 ] || die "内核源码获取失败: tarball 和 git clone 都失败"
+    echo "   git clone 成功"
+  fi
+  rm -f "$WORK_DIR/kernel.tar.gz"
+
+  # tarball 方式没有 .git, 直接校验版本号
+  if [ -d "$KERNEL_DIR/.git" ]; then
+    echo "   实际 HEAD: $(git -C "$KERNEL_DIR" rev-parse HEAD)"
+  else
+    echo "   (tarball 方式, 无 .git)"
   fi
   # 校验确实是 4.19.191
   grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) ' "$KERNEL_DIR/Makefile" | tr '\n' ' '
@@ -135,12 +160,25 @@ if [ ! -e "$KERNEL_DIR/vendor/oplus/kernel" ]; then
   echo "   branch : $MODULES_BRANCH"
   MOD_TMP="$WORK_DIR/_modules"
   rm -rf "$MOD_TMP"
-  if ! git clone --depth=1 --single-branch --branch "$MODULES_BRANCH" \
-        "$MODULES_REPO" "$MOD_TMP" 2>/dev/null; then
-    echo "   分支克隆失败, 尝试默认分支"
+  MOD_ENC="$(echo "$MODULES_BRANCH" | sed 's#/#%2F#g')"
+  MOD_URL="https://codeload.github.com/oppo-source/android_kernel_modules_oppo_mt6833/tar.gz/refs/heads/$MOD_ENC"
+  echo "-> 下载模块 tarball"
+  mkdir -p "$MOD_TMP"
+  mod_ok=0
+  set +e
+  if curl -fL --retry 5 --retry-delay 3 --retry-all-errors \
+        --connect-timeout 30 --max-time 600 \
+        -o "$WORK_DIR/modules.tar.gz" "$MOD_URL"; then
+    tar -xzf "$WORK_DIR/modules.tar.gz" -C "$MOD_TMP" --strip-components=1
+    [ -d "$MOD_TMP/vendor" ] && mod_ok=1
+  fi
+  set -e
+  rm -f "$WORK_DIR/modules.tar.gz"
+  if [ $mod_ok -eq 0 ]; then
+    echo "   tarball 失败, 回退 git clone"
     rm -rf "$MOD_TMP"
-    git clone --depth=1 "$MODULES_REPO" "$MOD_TMP" \
-      || die "无法获取模块仓库 $MODULES_REPO"
+    git clone --depth=1 --single-branch --branch "$MODULES_BRANCH" \
+      "$MODULES_REPO" "$MOD_TMP" || die "无法获取模块仓库"
   fi
   # 模块仓库根目录即 vendor/, 直接放到内核树根
   if [ -d "$MOD_TMP/vendor" ]; then
